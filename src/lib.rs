@@ -162,22 +162,17 @@ fn encode_image(img: &DynamicImage, img_fmt: ImageFormat, dest: &mut Vec<u8>) ->
     }
 }
 
-#[derive(Debug, Serialize)]
-struct UploadedImage {
-    scale: u32,
-    img_name: String,
-}
-
+/// Uploads an image to a bucket. Returns the file name (stem + extension for the image format) of the uploaded image if succeeded.
 #[worker::send]
 async fn upload_image_to_bucket(
-    name: &str,
+    stem: &str,
     data: Vec<u8>,
     img_fmt: ImageFormat,
     bucket: SendBucket,
-) -> Result<UploadedImage, ()> {
-    console_log!("uploading image... (name: {})", name);
+) -> Result<String, ()> {
+    console_log!("uploading image... (stem: {})", stem);
 
-    let key = format!("{}.{}", name, img_fmt.extensions_str()[0]);
+    let key = format!("{}.{}", stem, img_fmt.extensions_str()[0]);
     let meta = HttpMetadata {
         content_type: Some(img_fmt.to_mime_type().to_string()),
         ..HttpMetadata::default()
@@ -185,10 +180,7 @@ async fn upload_image_to_bucket(
 
     let put_res = bucket.put(&key, data).http_metadata(meta).execute().await;
     match put_res {
-        Ok(_) => Ok(UploadedImage {
-            scale: 1,
-            img_name: key,
-        }),
+        Ok(_) => Ok(key),
         Err(e) => {
             console_error!("failed to upload image to the bucket: {:?}", e);
             Err(())
@@ -203,20 +195,27 @@ struct ImageUploader {
     dest_bucket: SendBucket,
 }
 
+#[derive(Debug, Serialize)]
+struct UploadedImage {
+    scale: u32,
+    name: String,
+}
+
 impl ImageUploader {
     async fn upload_original_image(&self) -> Result<UploadedImage, ()> {
         let mut img_data = Vec::new();
         encode_image(&self.img, self.dest_fmt, &mut img_data)?;
 
-        let res = upload_image_to_bucket(
+        let name = upload_image_to_bucket(
             &self.hash,
             img_data,
             self.dest_fmt,
             self.dest_bucket.clone(),
         )
-        .await;
-        console_log!("uploaded original image");
-        res
+        .await?;
+        console_log!("uploaded original image (name: {})", &name);
+
+        Ok(UploadedImage { scale: 1, name })
     }
 
     async fn upload_upscaled_image(&self, scale: u32) -> Result<UploadedImage, ()> {
@@ -226,10 +225,13 @@ impl ImageUploader {
         let mut img_data = Vec::new();
         encode_image(&img, self.dest_fmt, &mut img_data)?;
 
-        let name = format!("{}_{}x", self.hash, scale);
-        let res =
-            upload_image_to_bucket(&name, img_data, self.dest_fmt, self.dest_bucket.clone()).await;
-        console_log!("uploaded {}x upscaled image", scale);
-        res
+        // stem (file name without extension) is the hash followed by the scale
+        let stem = format!("{}_{}x", self.hash, scale);
+
+        let name = upload_image_to_bucket(&stem, img_data, self.dest_fmt, self.dest_bucket.clone())
+            .await?;
+        console_log!("uploaded {}x upscaled image (name: {})", scale, &name);
+
+        Ok(UploadedImage { scale, name })
     }
 }
