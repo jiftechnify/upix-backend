@@ -1,12 +1,20 @@
 use std::io::Cursor;
 
 use futures::future;
-use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageFormat};
+use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageError, ImageFormat};
+use serde::Serialize;
+use serde_json::json;
 use sha2::{Digest, Sha256};
-use worker::*;
+use worker::{
+    console_error, console_log, event, send::SendWrapper, Bucket, Context, Env, HttpMetadata,
+    Request, Response, Result as WorkerResult, RouteContext, Router,
+};
+
+#[macro_use]
+mod macros;
 
 #[event(fetch)]
-async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
+async fn fetch(req: Request, env: Env, _ctx: Context) -> WorkerResult<Response> {
     console_error_panic_hook::set_once();
 
     let router = Router::new();
@@ -17,7 +25,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .await
 }
 
-fn handle_get(mut _req: Request, _ctx: RouteContext<()>) -> Result<Response> {
+fn handle_get(_req: Request, _ctx: RouteContext<()>) -> WorkerResult<Response> {
     Response::ok("upix API")
 }
 
@@ -33,36 +41,59 @@ fn handle_get(mut _req: Request, _ctx: RouteContext<()>) -> Result<Response> {
 //     Response::from_json(&images)
 // }
 
-type SendBucket = send::SendWrapper<Bucket>;
+type SendBucket = SendWrapper<Bucket>;
 
-macro_rules! map_pin {
-    ($($e:expr),* $(,)?) => {
-        vec![$(Box::pin($e)),*]
-    };
+struct ApiError {
+    status: u16,
+    message: Option<String>,
 }
 
-async fn handle_post_image(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+impl ApiError {
+    fn new(status: u16, msg: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: Some(msg.into()),
+        }
+    }
+    fn no_msg(status: u16) -> Self {
+        Self {
+            status,
+            message: None,
+        }
+    }
+
+    fn to_response(&self) -> WorkerResult<Response> {
+        Response::from_json(&json!({ "message": self.message })).map(|r| r.with_status(self.status))
+    }
+}
+
+type ApiResult<T> = std::result::Result<T, ApiError>;
+
+async fn handle_post_image(req: Request, ctx: RouteContext<()>) -> WorkerResult<Response> {
+    let res = post_image(req, ctx).await;
+    match res {
+        Ok(images) => Response::from_json(&images),
+        Err(e) => e.to_response(),
+    }
+}
+
+async fn post_image(mut req: Request, ctx: RouteContext<()>) -> ApiResult<Vec<UploadedImage>> {
     let Ok(bucket) = ctx.bucket("IMGS_BUCKET") else {
-        return Response::error("Internal Server Error", 500);
+        console_error!("failed to get bindings to the R2 bucket");
+        return Err(ApiError::no_msg(500));
     };
-    let bucket = send::SendWrapper::new(bucket);
+    let bucket = SendWrapper::new(bucket);
 
     let Ok(Some(content_type)) = req.headers().get("Content-Type") else {
-        return Response::error("Bad Request", 400);
+        return Err(ApiError::new(400, "missing Content-Type header"));
     };
-    if !content_type.starts_with("image/") {
-        return Response::error("Bad Request", 400);
-    }
-    let Some(img_fmt) = ImageFormat::from_mime_type(content_type) else {
-        return Response::error("Bad Request", 400);
-    };
+    let img_fmt = validate_img_format(&content_type)?;
 
     let Ok(body) = req.bytes().await else {
-        return Response::error("Bad Request", 400);
+        console_error!("could not read request body from the request");
+        return Err(ApiError::no_msg(500));
     };
-    let Ok((img, hash)) = load_image_with_hash(body, img_fmt) else {
-        return Response::error("Internal Server Error", 500);
-    };
+    let (img, hash) = load_image_with_hash(body, img_fmt)?;
 
     let uploader = ImageUploader {
         img,
@@ -78,34 +109,63 @@ async fn handle_post_image(mut req: Request, ctx: RouteContext<()>) -> Result<Re
         uploader.upload_upscaled_image(8),
         uploader.upload_upscaled_image(16),
     ];
-    let task_res: Result<Vec<_>> = future::join_all(tasks).await.into_iter().collect();
+    let task_res: Result<Vec<_>, ()> = future::join_all(tasks).await.into_iter().collect();
 
-    match task_res {
-        Ok(_) => Response::empty().map(|r| r.with_status(201)), // 201 Created
-        Err(e) => {
-            console_error!("{:?}", e);
-            Response::error("Internal Server Error", 500)
-        }
+    task_res.map_err(|e| {
+        console_error!("{:?}", e);
+        ApiError::new(500, "Internal Server Error")
+    })
+}
+
+fn validate_img_format(content_type: &str) -> ApiResult<ImageFormat> {
+    if !content_type.starts_with("image/") {
+        return Err(ApiError::new(400, "Content-Type is not for an image"));
+    }
+    let Some(img_fmt) = ImageFormat::from_mime_type(content_type) else {
+        return Err(ApiError::new(400, "Content-Type is not for an image"));
+    };
+
+    match img_fmt {
+        ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Gif | ImageFormat::WebP => Ok(img_fmt),
+        _ => Err(ApiError::new(
+            400,
+            format!("unsupported image format: {}", img_fmt.extensions_str()[0]),
+        )),
     }
 }
 
-fn load_image_with_hash(img_data: Vec<u8>, img_fmt: ImageFormat) -> Result<(DynamicImage, String)> {
+fn load_image_with_hash(
+    img_data: Vec<u8>,
+    img_fmt: ImageFormat,
+) -> ApiResult<(DynamicImage, String)> {
     let mut hasher = Sha256::new();
     hasher.update(&img_data);
     let hash = hex::encode(hasher.finalize());
 
-    let img = image::load_from_memory_with_format(&img_data, img_fmt)
-        .map_err(|e| Error::RustError(e.to_string()))?;
+    let img = image::load_from_memory_with_format(&img_data, img_fmt).map_err(|e| match e {
+        ImageError::Decoding(_) => ApiError::new(400, "failed to decode image"),
+        _ => ApiError::no_msg(500),
+    })?;
 
     Ok((img, hash))
 }
 
-fn write_image(img: &DynamicImage, img_fmt: ImageFormat, dest: &mut Vec<u8>) -> Result<()> {
+fn encode_image(img: &DynamicImage, img_fmt: ImageFormat, dest: &mut Vec<u8>) -> Result<(), ()> {
     let mut buf = Cursor::new(dest);
-    img.write_to(&mut buf, img_fmt)
-        .map_err(|e| Error::RustError(e.to_string()))?;
+    let write_res = img.write_to(&mut buf, img_fmt);
+    match write_res {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            console_error!("failed to write image to buffer: {:?}", e);
+            Err(())
+        }
+    }
+}
 
-    Ok(())
+#[derive(Debug, Serialize)]
+struct UploadedImage {
+    scale: u32,
+    img_name: String,
 }
 
 #[worker::send]
@@ -114,15 +174,26 @@ async fn upload_image_to_bucket(
     data: Vec<u8>,
     img_fmt: ImageFormat,
     bucket: SendBucket,
-) -> Result<()> {
+) -> Result<UploadedImage, ()> {
+    console_log!("uploading image... (name: {})", name);
+
     let key = format!("{}.{}", name, img_fmt.extensions_str()[0]);
     let meta = HttpMetadata {
         content_type: Some(img_fmt.to_mime_type().to_string()),
         ..HttpMetadata::default()
     };
 
-    bucket.put(key, data).http_metadata(meta).execute().await?;
-    Ok(())
+    let put_res = bucket.put(&key, data).http_metadata(meta).execute().await;
+    match put_res {
+        Ok(_) => Ok(UploadedImage {
+            scale: 1,
+            img_name: key,
+        }),
+        Err(e) => {
+            console_error!("failed to upload image to the bucket: {:?}", e);
+            Err(())
+        }
+    }
 }
 
 struct ImageUploader {
@@ -133,30 +204,32 @@ struct ImageUploader {
 }
 
 impl ImageUploader {
-    async fn upload_original_image(&self) -> Result<()> {
+    async fn upload_original_image(&self) -> Result<UploadedImage, ()> {
         let mut img_data = Vec::new();
-        write_image(&self.img, self.dest_fmt, &mut img_data)?;
-        upload_image_to_bucket(
+        encode_image(&self.img, self.dest_fmt, &mut img_data)?;
+
+        let res = upload_image_to_bucket(
             &self.hash,
             img_data,
             self.dest_fmt,
             self.dest_bucket.clone(),
         )
-        .await?;
+        .await;
         console_log!("uploaded original image");
-        Ok(())
+        res
     }
 
-    async fn upload_upscaled_image(&self, scale: u32) -> Result<()> {
+    async fn upload_upscaled_image(&self, scale: u32) -> Result<UploadedImage, ()> {
         let (w, h) = self.img.dimensions();
         let img = self.img.resize(w * scale, h * scale, FilterType::Nearest);
 
         let mut img_data = Vec::new();
-        write_image(&img, self.dest_fmt, &mut img_data)?;
+        encode_image(&img, self.dest_fmt, &mut img_data)?;
 
         let name = format!("{}_{}x", self.hash, scale);
-        upload_image_to_bucket(&name, img_data, self.dest_fmt, self.dest_bucket.clone()).await?;
+        let res =
+            upload_image_to_bucket(&name, img_data, self.dest_fmt, self.dest_bucket.clone()).await;
         console_log!("uploaded {}x upscaled image", scale);
-        Ok(())
+        res
     }
 }
