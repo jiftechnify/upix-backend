@@ -63,7 +63,11 @@ impl ApiError {
     }
 
     fn to_response(&self) -> WorkerResult<Response> {
-        Response::from_json(&json!({ "message": self.message })).map(|r| r.with_status(self.status))
+        let r = match &self.message {
+            None => Response::empty(),
+            Some(msg) => Response::from_json(&json!({ "message": msg })),
+        };
+        r.map(|r| r.with_status(self.status))
     }
 }
 
@@ -93,7 +97,13 @@ async fn post_image(mut req: Request, ctx: RouteContext<()>) -> ApiResult<Vec<Up
         console_error!("could not read request body from the request");
         return Err(ApiError::no_msg(500));
     };
+    // data length limit: 512 KiB
+    if body.len() > 512 * 1024 {
+        return Err(ApiError::no_msg(413)); // 413 Payload Too Large
+    }
+
     let (img, hash) = load_image_with_hash(body, img_fmt)?;
+    validate_img_dimension(&img)?;
 
     let uploader = ImageUploader {
         img,
@@ -132,6 +142,41 @@ fn validate_img_format(content_type: &str) -> ApiResult<ImageFormat> {
             format!("unsupported image format: {}", img_fmt.extensions_str()[0]),
         )),
     }
+}
+
+const MAX_PIXELS: u32 = 65536;
+const MAX_LONG_SIDE_LEN: u32 = 1024;
+const MAX_ASPECT_RATIO: f64 = 16.0;
+
+fn validate_img_dimension(img: &DynamicImage) -> ApiResult<()> {
+    let (w, h) = img.dimensions();
+    if w * h > MAX_PIXELS {
+        return Err(ApiError::new(
+            400,
+            format!("Image has too many pixels ({} > {})", w * h, MAX_PIXELS),
+        ));
+    }
+
+    let (long, short) = if w > h { (w, h) } else { (h, w) };
+    if long > MAX_LONG_SIDE_LEN {
+        return Err(ApiError::new(
+            400,
+            format!(
+                "Long side of image is too long ({} > {})",
+                long, MAX_LONG_SIDE_LEN
+            ),
+        ));
+    }
+    if f64::from(long) / f64::from(short) > MAX_ASPECT_RATIO {
+        return Err(ApiError::new(
+            400,
+            format!(
+                "Aspect retio of image is out of range ({} : {} > {} : 1)",
+                long, short, MAX_ASPECT_RATIO
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn load_image_with_hash(
