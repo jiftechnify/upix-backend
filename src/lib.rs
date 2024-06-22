@@ -126,7 +126,7 @@ fn validate_img_format(content_type: &str) -> ApiResult<ImageFormat> {
     };
 
     match img_fmt {
-        ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Gif | ImageFormat::WebP => Ok(img_fmt),
+        ImageFormat::Png | ImageFormat::WebP | ImageFormat::Bmp | ImageFormat::Gif => Ok(img_fmt),
         _ => Err(ApiError::new(
             400,
             format!("unsupported image format: {}", img_fmt.extensions_str()[0]),
