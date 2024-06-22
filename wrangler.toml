@@ -1,0 +1,14 @@
+name = "upix"
+main = "build/worker/shim.mjs"
+compatibility_date = "2024-06-22"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[[r2_buckets]]
+binding = "IMGS_BUCKET"
+bucket_name = "upix-imgs"
+preview_bucket_name="upix-imgs-preview"
+
+[dev]
+ip = "127.0.0.1"
