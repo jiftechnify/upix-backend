@@ -6,8 +6,8 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use worker::{
-    console_error, console_log, event, send::SendWrapper, Bucket, Context, Env, HttpMetadata,
-    Request, Response, Result as WorkerResult, RouteContext, Router,
+    console_error, console_log, event, send::SendWrapper, Bucket, Context, Env, FormEntry,
+    HttpMetadata, Request, Response, Result as WorkerResult, RouteContext, Router,
 };
 
 #[event(fetch)]
@@ -40,6 +40,7 @@ fn handle_get(_req: Request, _ctx: RouteContext<()>) -> WorkerResult<Response> {
 
 type SendBucket = SendWrapper<Bucket>;
 
+#[derive(Debug)]
 struct ApiError {
     status: u16,
     message: Option<String>,
@@ -88,18 +89,14 @@ async fn post_image(mut req: Request, ctx: RouteContext<()>) -> ApiResult<Vec<Up
     let Ok(Some(content_type)) = req.headers().get("Content-Type") else {
         return Err(ApiError::new(400, "missing Content-Type header"));
     };
-    let img_fmt = validate_img_format(&content_type)?;
 
-    let Ok(body) = req.bytes().await else {
-        console_error!("could not read request body from the request");
-        return Err(ApiError::no_msg(500));
+    let (img_data, img_fmt) = if content_type.starts_with("multipart/form-data") {
+        get_image_data_from_form_data(&mut req).await?
+    } else {
+        get_image_data_from_req_body(&mut req, &content_type).await?
     };
-    // data length limit: 512 KiB
-    if body.len() > 512 * 1024 {
-        return Err(ApiError::no_msg(413)); // 413 Payload Too Large
-    }
 
-    let (img, hash) = load_image_with_hash(body, img_fmt)?;
+    let (img, hash) = load_image_with_hash(img_data, img_fmt)?;
     validate_img_dimension(&img)?;
 
     let uploader = ImageUploader {
@@ -114,6 +111,49 @@ async fn post_image(mut req: Request, ctx: RouteContext<()>) -> ApiResult<Vec<Up
         console_error!("{:?}", e);
         ApiError::new(500, "Internal Server Error")
     })
+}
+
+const MAX_DATA_LEN: usize = 512 * 1024;
+
+async fn get_image_data_from_req_body(
+    req: &mut Request,
+    ctype: &str,
+) -> ApiResult<(Vec<u8>, ImageFormat)> {
+    let img_fmt = validate_img_format(ctype)?;
+
+    let Ok(img_data) = req.bytes().await else {
+        console_error!("could not read request body from the request");
+        return Err(ApiError::no_msg(500));
+    };
+    if img_data.len() > MAX_DATA_LEN {
+        return Err(ApiError::new(413, "Payload Too Large"));
+    }
+    Ok((img_data, img_fmt))
+}
+
+async fn get_image_data_from_form_data(req: &mut Request) -> ApiResult<(Vec<u8>, ImageFormat)> {
+    let Ok(form_data) = req.form_data().await else {
+        console_error!("could not read form data from the request");
+        return Err(ApiError::no_msg(500));
+    };
+
+    let Some(file_entry) = form_data.get("file") else {
+        return Err(ApiError::new(400, "missing 'file' field in form data"));
+    };
+    let FormEntry::File(file) = file_entry else {
+        return Err(ApiError::new(400, "'file' field is not a file"));
+    };
+
+    if file.size() > MAX_DATA_LEN {
+        return Err(ApiError::new(413, "Payload Too Large"));
+    }
+
+    let img_fmt = validate_img_format(&file.type_())?;
+    let Ok(img_data) = file.bytes().await else {
+        console_error!("could not read file data from the form data");
+        return Err(ApiError::no_msg(500));
+    };
+    Ok((img_data, img_fmt))
 }
 
 fn validate_img_format(content_type: &str) -> ApiResult<ImageFormat> {
