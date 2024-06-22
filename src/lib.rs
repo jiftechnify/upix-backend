@@ -6,7 +6,7 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use worker::{
-    console_error, console_log, event, send::SendWrapper, Bucket, Context, Env, FormEntry,
+    console_error, console_log, event, send::SendWrapper, Bucket, Context, Cors, Env, FormEntry,
     HttpMetadata, Request, Response, Result as WorkerResult, RouteContext, Router,
 };
 
@@ -77,6 +77,7 @@ async fn handle_post_image(req: Request, ctx: RouteContext<()>) -> WorkerResult<
         Ok(images) => Response::from_json(&images),
         Err(e) => e.to_response(),
     }
+    .and_then(|r| r.with_cors(&Cors::default().with_origins(["*"])))
 }
 
 async fn post_image(mut req: Request, ctx: RouteContext<()>) -> ApiResult<Vec<UploadedImage>> {
