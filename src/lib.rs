@@ -10,9 +10,6 @@ use worker::{
     Request, Response, Result as WorkerResult, RouteContext, Router,
 };
 
-#[macro_use]
-mod macros;
-
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> WorkerResult<Response> {
     console_error_panic_hook::set_once();
@@ -112,16 +109,8 @@ async fn post_image(mut req: Request, ctx: RouteContext<()>) -> ApiResult<Vec<Up
         dest_bucket: bucket,
     };
 
-    let tasks: Vec<future::BoxFuture<_>> = map_pin![
-        uploader.upload_original_image(),
-        uploader.upload_upscaled_image(2),
-        uploader.upload_upscaled_image(4),
-        uploader.upload_upscaled_image(8),
-        uploader.upload_upscaled_image(16),
-    ];
-    let task_res: Result<Vec<_>, ()> = future::join_all(tasks).await.into_iter().collect();
-
-    task_res.map_err(|e| {
+    let upload_res = uploader.upload_all().await;
+    upload_res.map_err(|e| {
         console_error!("{:?}", e);
         ApiError::new(500, "Internal Server Error")
     })
@@ -247,6 +236,23 @@ struct UploadedImage {
 }
 
 impl ImageUploader {
+    async fn upload_all(&self) -> Result<Vec<UploadedImage>, ()> {
+        let (w, h) = self.img.dimensions();
+        let long = u32::max(w, h);
+
+        let tasks = [1, 2, 4, 8, 16]
+            .into_iter()
+            .take_while(|&x| long * x <= 1024)
+            .map(|scale| {
+                if scale == 1 {
+                    Box::pin(self.upload_original_image()) as future::BoxFuture<_>
+                } else {
+                    Box::pin(self.upload_upscaled_image(scale)) as future::BoxFuture<_>
+                }
+            });
+        future::join_all(tasks).await.into_iter().collect()
+    }
+
     async fn upload_original_image(&self) -> Result<UploadedImage, ()> {
         let mut img_data = Vec::new();
         encode_image(&self.img, self.dest_fmt, &mut img_data)?;
