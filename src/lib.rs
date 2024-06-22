@@ -271,8 +271,10 @@ struct ImageUploader {
 
 #[derive(Debug, Serialize)]
 struct UploadedImage {
-    scale: u32,
     name: String,
+    scale: u32,
+    width: u32,
+    height: u32,
 }
 
 impl ImageUploader {
@@ -306,12 +308,19 @@ impl ImageUploader {
         .await?;
         console_log!("uploaded original image (name: {})", &name);
 
-        Ok(UploadedImage { scale: 1, name })
+        Ok(UploadedImage {
+            name,
+            scale: 1,
+            width: self.img.width(),
+            height: self.img.height(),
+        })
     }
 
     async fn upload_upscaled_image(&self, scale: u32) -> Result<UploadedImage, ()> {
         let (w, h) = self.img.dimensions();
-        let img = self.img.resize(w * scale, h * scale, FilterType::Nearest);
+        let (w, h) = (w * scale, h * scale);
+
+        let img = self.img.resize(w, h, FilterType::Nearest);
 
         let mut img_data = Vec::new();
         encode_image(&img, self.dest_fmt, &mut img_data)?;
@@ -323,6 +332,11 @@ impl ImageUploader {
             .await?;
         console_log!("uploaded {}x upscaled image (name: {})", scale, &name);
 
-        Ok(UploadedImage { scale, name })
+        Ok(UploadedImage {
+            name,
+            scale,
+            width: w,
+            height: h,
+        })
     }
 }
