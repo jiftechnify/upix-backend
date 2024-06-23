@@ -1,0 +1,10 @@
+name = "upix-dyn"
+main = "build/worker/shim.mjs"
+compatibility_date = "2024-06-23"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[dev]
+ip = "127.0.0.1"
+port = 8788

@@ -1,4 +1,4 @@
-name = "upix"
+name = "upix-api"
 main = "build/worker/shim.mjs"
 compatibility_date = "2024-06-22"
 
