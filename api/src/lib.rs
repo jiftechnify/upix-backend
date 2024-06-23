@@ -87,34 +87,39 @@ async fn post_image(mut req: Request, ctx: RouteContext<()>) -> ApiResult<Vec<Up
     };
     let bucket = SendWrapper::new(bucket);
 
-    let Ok(Some(content_type)) = req.headers().get("Content-Type") else {
-        return Err(ApiError::new(400, "missing Content-Type header"));
-    };
-
-    let (img_data, img_fmt) = if content_type.starts_with("multipart/form-data") {
-        get_image_data_from_form_data(&mut req).await?
-    } else {
-        get_image_data_from_req_body(&mut req, &content_type).await?
-    };
-
-    let (img, hash) = load_image_with_hash(img_data, img_fmt)?;
+    let (img_data, img_fmt) = get_image_data_from_request(&mut req).await?;
+    let img = image::load_from_memory_with_format(&img_data, img_fmt).map_err(|e| match e {
+        ImageError::Decoding(_) => ApiError::new(400, "Failed to decode image"),
+        e => {
+            console_error!("failed to load image: {:?}", e);
+            ApiError::no_msg(500)
+        }
+    })?;
     validate_img_dimension(&img)?;
 
     let uploader = ImageUploader {
         img,
-        hash,
+        hash: sha256_hex(&img_data),
         dest_fmt: ImageFormat::Png,
         dest_bucket: bucket,
     };
-
     let upload_res = uploader.upload_all().await;
-    upload_res.map_err(|e| {
-        console_error!("{:?}", e);
-        ApiError::new(500, "Internal Server Error")
-    })
+    upload_res.map_err(|_| ApiError::no_msg(500))
 }
 
 const MAX_DATA_LEN: usize = 512 * 1024;
+
+async fn get_image_data_from_request(req: &mut Request) -> ApiResult<(Vec<u8>, ImageFormat)> {
+    let Ok(Some(content_type)) = req.headers().get("Content-Type") else {
+        return Err(ApiError::new(400, "missing Content-Type header"));
+    };
+
+    if content_type.starts_with("multipart/form-data") {
+        get_image_data_from_form_data(req).await
+    } else {
+        get_image_data_from_req_body(req, &content_type).await
+    }
+}
 
 async fn get_image_data_from_req_body(
     req: &mut Request,
@@ -209,20 +214,10 @@ fn validate_img_dimension(img: &DynamicImage) -> ApiResult<()> {
     Ok(())
 }
 
-fn load_image_with_hash(
-    img_data: Vec<u8>,
-    img_fmt: ImageFormat,
-) -> ApiResult<(DynamicImage, String)> {
+fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(&img_data);
-    let hash = hex::encode(hasher.finalize());
-
-    let img = image::load_from_memory_with_format(&img_data, img_fmt).map_err(|e| match e {
-        ImageError::Decoding(_) => ApiError::new(400, "failed to decode image"),
-        _ => ApiError::no_msg(500),
-    })?;
-
-    Ok((img, hash))
+    hasher.update(data);
+    hex::encode(hasher.finalize())
 }
 
 fn encode_image(img: &DynamicImage, img_fmt: ImageFormat, dest: &mut Vec<u8>) -> Result<(), ()> {
@@ -231,7 +226,7 @@ fn encode_image(img: &DynamicImage, img_fmt: ImageFormat, dest: &mut Vec<u8>) ->
     match write_res {
         Ok(_) => Ok(()),
         Err(e) => {
-            console_error!("failed to write image to buffer: {:?}", e);
+            console_error!("Failed to encoded image data to buffer: {:?}", e);
             Err(())
         }
     }
