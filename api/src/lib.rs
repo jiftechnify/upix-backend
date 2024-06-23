@@ -220,16 +220,18 @@ fn sha256_hex(data: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
-fn encode_image(img: &DynamicImage, img_fmt: ImageFormat, dest: &mut Vec<u8>) -> Result<(), ()> {
+fn encode_image(
+    img: &DynamicImage,
+    img_fmt: ImageFormat,
+    dest: &mut Vec<u8>,
+) -> Result<(), ImageError> {
     let mut buf = Cursor::new(dest);
-    let write_res = img.write_to(&mut buf, img_fmt);
-    match write_res {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            console_error!("Failed to encoded image data to buffer: {:?}", e);
-            Err(())
-        }
-    }
+    img.write_to(&mut buf, img_fmt)
+}
+
+fn upscale_image(img: &DynamicImage, scale: u32) -> DynamicImage {
+    let (w, h) = img.dimensions();
+    img.resize(w * scale, h * scale, FilterType::Nearest)
 }
 
 /// Uploads an image to a bucket. Returns the file name (stem + extension for the image format) of the uploaded image if succeeded.
@@ -293,7 +295,9 @@ impl ImageUploader {
 
     async fn upload_original_image(&self) -> Result<UploadedImage, ()> {
         let mut img_data = Vec::new();
-        encode_image(&self.img, self.dest_fmt, &mut img_data)?;
+        encode_image(&self.img, self.dest_fmt, &mut img_data).map_err(|e| {
+            console_error!("failed to encode image: {:?}", e);
+        })?;
 
         let name = upload_image_to_bucket(
             &self.hash,
@@ -313,13 +317,12 @@ impl ImageUploader {
     }
 
     async fn upload_upscaled_image(&self, scale: u32) -> Result<UploadedImage, ()> {
-        let (w, h) = self.img.dimensions();
-        let (w, h) = (w * scale, h * scale);
-
-        let img = self.img.resize(w, h, FilterType::Nearest);
+        let scaled = upscale_image(&self.img, scale);
 
         let mut img_data = Vec::new();
-        encode_image(&img, self.dest_fmt, &mut img_data)?;
+        encode_image(&scaled, self.dest_fmt, &mut img_data).map_err(|e| {
+            console_error!("failed to encode image: {:?}", e);
+        })?;
 
         // stem (file name without extension) is the hash followed by the scale
         let stem = format!("{}_{}x", self.hash, scale);
@@ -331,8 +334,8 @@ impl ImageUploader {
         Ok(UploadedImage {
             name,
             scale,
-            width: w,
-            height: h,
+            width: scaled.width(),
+            height: scaled.height(),
         })
     }
 }
