@@ -111,7 +111,7 @@ const MAX_DATA_LEN: usize = 512 * 1024;
 
 async fn get_image_data_from_request(req: &mut Request) -> ApiResult<(Vec<u8>, ImageFormat)> {
     let Ok(Some(content_type)) = req.headers().get("Content-Type") else {
-        return Err(ApiError::new(400, "missing Content-Type header"));
+        return Err(ApiError::new(400, "Missing Content-Type header"));
     };
 
     if content_type.starts_with("multipart/form-data") {
@@ -132,7 +132,7 @@ async fn get_image_data_from_req_body(
         return Err(ApiError::no_msg(500));
     };
     if img_data.len() > MAX_DATA_LEN {
-        return Err(ApiError::new(413, "Payload Too Large"));
+        return Err(ApiError::new(413, "Too large image data"));
     }
     Ok((img_data, img_fmt))
 }
@@ -144,14 +144,14 @@ async fn get_image_data_from_form_data(req: &mut Request) -> ApiResult<(Vec<u8>,
     };
 
     let Some(file_entry) = form_data.get("file") else {
-        return Err(ApiError::new(400, "missing 'file' field in form data"));
+        return Err(ApiError::new(400, "Missing 'file' field in form data"));
     };
     let FormEntry::File(file) = file_entry else {
         return Err(ApiError::new(400, "'file' field is not a file"));
     };
 
     if file.size() > MAX_DATA_LEN {
-        return Err(ApiError::new(413, "Payload Too Large"));
+        return Err(ApiError::new(413, "Too large image data"));
     }
 
     let img_fmt = validate_img_format(&file.type_())?;
@@ -174,7 +174,7 @@ fn validate_img_format(content_type: &str) -> ApiResult<ImageFormat> {
         ImageFormat::Png | ImageFormat::WebP | ImageFormat::Bmp | ImageFormat::Gif => Ok(img_fmt),
         _ => Err(ApiError::new(
             400,
-            format!("unsupported image format: {}", img_fmt.extensions_str()[0]),
+            format!("Unsupported image format: {}", img_fmt.extensions_str()[0]),
         )),
     }
 }
