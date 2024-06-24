@@ -150,7 +150,7 @@ struct ReqPathParts {
 
 fn match_req_path(path: &str) -> Option<ReqPathParts> {
     let re_path =
-        Regex::new(r"^/(?P<hash>[0-9a-f]{64})(?P<sx>_(?P<scale>[0-9]+)x)?\.(?P<ext>[a-z]+)$")
+        Regex::new(r"^/(?P<hash>[0-9a-f]{64})(?P<sx>_(?P<scale>[1-9][0-9]*)x)?\.(?P<ext>[a-z]+)$")
             .unwrap();
     let caps = re_path.captures(path)?;
 
@@ -171,23 +171,30 @@ mod test {
 
     #[test]
     fn test_match_req_path() {
-        let path = format!("{}_2x.png", HASH);
+        let path = format!("/{}_2x.png", HASH);
         let parts = match_req_path(&path).unwrap();
         assert_eq!(parts.hash, HASH);
         assert_eq!(parts.scale, 2);
         assert_eq!(parts.ext, "png");
 
-        let path = format!("{}.png", HASH);
+        let path = format!("/{}_100x.png", HASH);
+        let parts = match_req_path(&path).unwrap();
+        assert_eq!(parts.scale, 100);
+
+        let path = format!("/{}.png", HASH);
         let parts = match_req_path(&path).unwrap();
         assert_eq!(parts.hash, HASH);
         assert_eq!(parts.scale, 1);
-        assert_eq!(parts.ext, "png");
 
-        let path = "notahash_2x.png";
+        let path = "/notahash_2x.png";
         let parts = match_req_path(path);
         assert!(parts.is_none());
 
-        let path = format!("{}_2x", HASH);
+        let path = format!("/{}_2x", HASH);
+        let parts = match_req_path(&path);
+        assert!(parts.is_none());
+
+        let path = format!("/{}_0x.png", HASH);
         let parts = match_req_path(&path);
         assert!(parts.is_none());
     }
