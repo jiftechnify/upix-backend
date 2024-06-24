@@ -13,11 +13,18 @@ async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
     }
 }
 
+const MIN_PATH_LEN: usize = 66; // 64 (hash) + 1 (heading "/") + 1 (".")
+
 async fn handle(req: Request, env: Env, ctx: Context) -> ApiResult<Response> {
     // deny methods other than GET
     if req.method() != Method::Get {
-        console_log!("unsupported method: {:?}", req.method());
+        console_log!("Unsupported method: {:?}", req.method());
         return Err(ApiError::no_msg(405)); // 405 Method Not Allowed
+    }
+    // rough path validation
+    if req.path().len() < MIN_PATH_LEN {
+        console_log!("Path too short: {}", req.path());
+        return Err(ApiError::no_msg(404));
     }
 
     // get bindings to the bucket
