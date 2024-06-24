@@ -2,6 +2,7 @@ use std::io::Cursor;
 
 use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageError, ImageFormat};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use worker::{Response, Result as WorkerResult};
 
 /// Encode the `DynamicImage` into a `dest` buffer with the given format.
@@ -50,3 +51,10 @@ impl ApiError {
 }
 
 pub type ApiResult<T> = std::result::Result<T, ApiError>;
+
+/// Calculate the SHA-256 hash of the given data and convert it to a hex string.
+pub fn sha256_hex(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hex::encode(hasher.finalize())
+}

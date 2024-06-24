@@ -1,6 +1,6 @@
 use regex::Regex;
 use send::SendWrapper;
-use upix_lib::{encode_image, upscale_image, ApiError, ApiResult};
+use upix_lib::{encode_image, sha256_hex, upscale_image, ApiError, ApiResult};
 use worker::*;
 
 #[event(fetch)]
@@ -40,9 +40,12 @@ async fn handle(req: Request, env: Env, ctx: Context) -> ApiResult<Response> {
 
     // generate a response with upscaled image
     let img_data = generate_upscaled_image(&req.path(), bucket).await?;
+    let hash = sha256_hex(&img_data);
+
     let resp_headers: Headers = [
         ("Content-Type", "image/png"),
         ("Cache-Control", "public, max-age=31536000"),
+        ("ETag", &hash),
     ]
     .iter()
     .collect();

@@ -780,8 +780,10 @@ dependencies = [
 name = "upix-lib"
 version = "0.0.0"
 dependencies = [
+ "hex",
  "image",
  "serde_json",
+ "sha2",
  "worker",
 ]
 

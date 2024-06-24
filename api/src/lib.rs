@@ -1,13 +1,12 @@
 use futures::future;
 use image::{DynamicImage, GenericImageView, ImageError, ImageFormat};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use worker::{
     console_error, console_log, event, send::SendWrapper, Bucket, Context, Cors, Env, FormEntry,
     HttpMetadata, Request, Response, Result as WorkerResult, RouteContext, Router,
 };
 
-use upix_lib::{encode_image, upscale_image, ApiError, ApiResult};
+use upix_lib::{encode_image, sha256_hex, upscale_image, ApiError, ApiResult};
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> WorkerResult<Response> {
@@ -178,12 +177,6 @@ fn validate_img_dimension(img: &DynamicImage) -> ApiResult<()> {
         ));
     }
     Ok(())
-}
-
-fn sha256_hex(data: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    hex::encode(hasher.finalize())
 }
 
 /// Uploads an image to a bucket. Returns the file name (stem + extension for the image format) of the uploaded image if succeeded.
