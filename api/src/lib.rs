@@ -1,14 +1,13 @@
 use futures::future;
 use image::{DynamicImage, GenericImageView, ImageError, ImageFormat};
 use serde::Serialize;
-use serde_json::json;
 use sha2::{Digest, Sha256};
 use worker::{
     console_error, console_log, event, send::SendWrapper, Bucket, Context, Cors, Env, FormEntry,
     HttpMetadata, Request, Response, Result as WorkerResult, RouteContext, Router,
 };
 
-use upix_lib::{encode_image, upscale_image};
+use upix_lib::{encode_image, upscale_image, ApiError, ApiResult};
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> WorkerResult<Response> {
@@ -37,39 +36,6 @@ fn handle_get(_req: Request, _ctx: RouteContext<()>) -> WorkerResult<Response> {
 //     let images = images.iter().map(|img| img.key()).collect::<Vec<_>>();
 //     Response::from_json(&images)
 // }
-
-type SendBucket = SendWrapper<Bucket>;
-
-#[derive(Debug)]
-struct ApiError {
-    status: u16,
-    message: Option<String>,
-}
-
-impl ApiError {
-    fn new(status: u16, msg: impl Into<String>) -> Self {
-        Self {
-            status,
-            message: Some(msg.into()),
-        }
-    }
-    fn no_msg(status: u16) -> Self {
-        Self {
-            status,
-            message: None,
-        }
-    }
-
-    fn to_response(&self) -> WorkerResult<Response> {
-        let r = match &self.message {
-            None => Response::empty(),
-            Some(msg) => Response::from_json(&json!({ "message": msg })),
-        };
-        r.map(|r| r.with_status(self.status))
-    }
-}
-
-type ApiResult<T> = std::result::Result<T, ApiError>;
 
 async fn handle_post_image(req: Request, ctx: RouteContext<()>) -> WorkerResult<Response> {
     let res = post_image(req, ctx).await;
@@ -226,7 +192,7 @@ async fn upload_image_to_bucket(
     stem: &str,
     data: Vec<u8>,
     img_fmt: ImageFormat,
-    bucket: SendBucket,
+    bucket: SendWrapper<Bucket>,
 ) -> Result<String, ()> {
     console_log!("uploading image... (stem: {})", stem);
 
@@ -250,7 +216,7 @@ struct ImageUploader {
     img: DynamicImage,
     hash: String,
     dest_fmt: ImageFormat,
-    dest_bucket: SendBucket,
+    dest_bucket: SendWrapper<Bucket>,
 }
 
 #[derive(Debug, Serialize)]

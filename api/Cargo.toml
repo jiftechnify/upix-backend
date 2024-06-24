@@ -21,7 +21,6 @@ worker.workspace = true
 worker-macros.workspace = true
 console_error_panic_hook.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 image.workspace = true
 sha2.workspace = true
 hex.workspace = true

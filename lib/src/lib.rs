@@ -1,6 +1,8 @@
 use std::io::Cursor;
 
 use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageError, ImageFormat};
+use serde_json::json;
+use worker::{Response, Result as WorkerResult};
 
 /// Encode the `DynamicImage` into a `dest` buffer with the given format.
 pub fn encode_image(
@@ -17,3 +19,34 @@ pub fn upscale_image(img: &DynamicImage, scale: u32) -> DynamicImage {
     let (w, h) = img.dimensions();
     img.resize(w * scale, h * scale, FilterType::Nearest)
 }
+
+#[derive(Debug)]
+pub struct ApiError {
+    status: u16,
+    message: Option<String>,
+}
+
+impl ApiError {
+    pub fn new(status: u16, msg: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: Some(msg.into()),
+        }
+    }
+    pub fn no_msg(status: u16) -> Self {
+        Self {
+            status,
+            message: None,
+        }
+    }
+
+    pub fn to_response(&self) -> WorkerResult<Response> {
+        let r = match &self.message {
+            None => Response::empty(),
+            Some(msg) => Response::from_json(&json!({ "message": msg })),
+        };
+        r.map(|r| r.with_status(self.status))
+    }
+}
+
+pub type ApiResult<T> = std::result::Result<T, ApiError>;

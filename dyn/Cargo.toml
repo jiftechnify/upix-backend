@@ -15,6 +15,10 @@ wasm-opt = false
 crate-type = ["cdylib"]
 
 [dependencies]
-worker = { version="0.2.0" }
-worker-macros = { version="0.2.0" }
-console_error_panic_hook = { version = "0.1.1" }
+upix-lib = { path = "../lib" }
+regex = { version = "1.10.5", default-features = false, features = ["std"] }
+worker.workspace = true
+worker-macros.workspace = true
+console_error_panic_hook.workspace = true
+image.workspace = true
+futures.workspace = true
