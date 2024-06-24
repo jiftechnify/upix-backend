@@ -1,3 +1,14 @@
 [workspace]
 resolver = "2"
 members = ["api", "dyn", "lib"]
+
+[workspace.dependencies]
+worker = "0.2.0"
+worker-macros = { version="0.2.0" }
+console_error_panic_hook = { version = "0.1.1" }
+serde = "1.0.203"
+serde_json = "1.0.117"
+image = { version = "0.25.1", default-features = false, features = ["png", "webp", "gif", "bmp"] }
+sha2 = "0.10.8"
+hex = "0.4.3"
+futures = "0.3.30"

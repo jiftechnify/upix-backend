@@ -1,7 +1,5 @@
-use std::io::Cursor;
-
 use futures::future;
-use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageError, ImageFormat};
+use image::{DynamicImage, GenericImageView, ImageError, ImageFormat};
 use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -9,6 +7,8 @@ use worker::{
     console_error, console_log, event, send::SendWrapper, Bucket, Context, Cors, Env, FormEntry,
     HttpMetadata, Request, Response, Result as WorkerResult, RouteContext, Router,
 };
+
+use upix_lib::{encode_image, upscale_image};
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> WorkerResult<Response> {
@@ -218,20 +218,6 @@ fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     hex::encode(hasher.finalize())
-}
-
-fn encode_image(
-    img: &DynamicImage,
-    img_fmt: ImageFormat,
-    dest: &mut Vec<u8>,
-) -> Result<(), ImageError> {
-    let mut buf = Cursor::new(dest);
-    img.write_to(&mut buf, img_fmt)
-}
-
-fn upscale_image(img: &DynamicImage, scale: u32) -> DynamicImage {
-    let (w, h) = img.dimensions();
-    img.resize(w * scale, h * scale, FilterType::Nearest)
 }
 
 /// Uploads an image to a bucket. Returns the file name (stem + extension for the image format) of the uploaded image if succeeded.
