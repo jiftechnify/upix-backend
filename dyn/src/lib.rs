@@ -116,6 +116,13 @@ async fn generate_upscaled_image(
             console_error!("Failed to decode image from memory: {:?}", e);
             ApiError::no_msg(500)
         })?;
+
+    // limit scale factor to avoid generating oversized images
+    let long_side = u32::max(src_img.width(), src_img.height());
+    if long_side * parts.scale > 1024 {
+        return Err(ApiError::new(400, "Scale too big"));
+    }
+
     let upscaled_img = if parts.scale == 1 {
         src_img
     } else {
